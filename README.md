@@ -12,8 +12,8 @@ When the conversation is inside a Discord thread, the plugin provides the agent 
 
 It also injects a compact English prompt only on the first turn of a Discord thread session, telling Hermes to:
 
-- check the current thread title
-- immediately name or correct it on the first turn if it does not fit
+- assign a fitting thread title immediately on the first turn
+- use `change_thread_title` directly without asking for confirmation first
 - later rename only when the main topic clearly changes
 - keep the title concise, with a soft limit of 40 characters
 - use the user's habitual language for the title itself

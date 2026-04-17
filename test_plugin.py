@@ -21,10 +21,10 @@ def test_build_topic_guard_context_includes_current_title_and_tool_names_on_firs
     ctx = plugin.build_topic_guard_context('s1', is_first_turn=True)
     assert ctx is not None
     assert 'Hermes 上下文與主題改名' in ctx
-    assert plugin.GET_TOOL_NAME in ctx
     assert plugin.CHANGE_TOOL_NAME in ctx
     assert str(plugin.TITLE_SOFT_LIMIT) in ctx
     assert 'On the first turn' in ctx
+    assert 'Do not ask for confirmation first' in ctx
 
 
 def test_build_topic_guard_context_none_after_first_turn(monkeypatch):

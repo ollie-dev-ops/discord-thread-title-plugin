@@ -152,8 +152,8 @@ def build_topic_guard_context(session_id: str, is_first_turn: bool = False) -> O
         return None
     return (
         f"Current Discord thread title: {title}. "
-        f"Use `{GET_TOOL_NAME}` to check it. "
-        f"On the first turn, if the title does not fit, use `{CHANGE_TOOL_NAME}` to name or correct it now. "
+        f"On the first turn, assign a fitting thread title now using `{CHANGE_TOOL_NAME}`. "
+        f"Do not ask for confirmation first. "
         f"Later, rename only if the main topic clearly changes. "
         f"Keep titles concise (soft limit: {TITLE_SOFT_LIMIT} chars) and use the user's habitual language."
     )
