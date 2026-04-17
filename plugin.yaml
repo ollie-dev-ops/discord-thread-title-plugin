@@ -1,0 +1,10 @@
+name: discord-thread-title
+version: 1.0.0
+description: "Auto/manual Discord thread title management for Hermes via plugin, without core changes."
+author: "Hermes Agent"
+provides_hooks:
+  - on_session_start
+  - post_llm_call
+provides_commands:
+  - rename-thread
+  - suggest-thread-title
