@@ -24,7 +24,7 @@ def test_build_topic_guard_context_includes_current_title_and_tool_names_on_firs
     assert plugin.GET_TOOL_NAME in ctx
     assert plugin.CHANGE_TOOL_NAME in ctx
     assert str(plugin.TITLE_SOFT_LIMIT) in ctx
-    assert 'On this first turn' in ctx
+    assert 'On the first turn' in ctx
 
 
 def test_build_topic_guard_context_none_after_first_turn(monkeypatch):
