@@ -8,7 +8,7 @@ plugin = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plugin)
 
 
-def test_build_topic_guard_context_includes_current_title_and_tool_names(monkeypatch):
+def test_build_topic_guard_context_includes_current_title_and_tool_names_on_first_turn(monkeypatch):
     monkeypatch.setattr(
         plugin,
         'source_for_session',
@@ -18,12 +18,26 @@ def test_build_topic_guard_context_includes_current_title_and_tool_names(monkeyp
             'chat_name': 'Guild / Hermes 上下文與主題改名',
         },
     )
-    ctx = plugin.build_topic_guard_context('s1')
+    ctx = plugin.build_topic_guard_context('s1', is_first_turn=True)
     assert ctx is not None
     assert 'Hermes 上下文與主題改名' in ctx
     assert plugin.GET_TOOL_NAME in ctx
     assert plugin.CHANGE_TOOL_NAME in ctx
     assert str(plugin.TITLE_SOFT_LIMIT) in ctx
+    assert 'On this first turn' in ctx
+
+
+def test_build_topic_guard_context_none_after_first_turn(monkeypatch):
+    monkeypatch.setattr(
+        plugin,
+        'source_for_session',
+        lambda session_id: {
+            'platform': 'discord',
+            'thread_id': '1494707116454314115',
+            'chat_name': 'Guild / Hermes 上下文與主題改名',
+        },
+    )
+    assert plugin.build_topic_guard_context('s1', is_first_turn=False) is None
 
 
 def test_build_topic_guard_context_none_for_non_discord(monkeypatch):

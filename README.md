@@ -10,12 +10,12 @@ When the conversation is inside a Discord thread, the plugin provides the agent 
 - `get_thread_title` — read the current Discord thread title and thread ID
 - `change_thread_title` — rename the current Discord thread
 
-It also injects a short English prompt before the model call telling Hermes to:
+It also injects a compact English prompt only on the first turn of a Discord thread session, telling Hermes to:
 
-- check whether the current conversation still matches the current thread title
-- avoid renaming if the current title still fits
-- rename only when the topic has clearly changed
-- keep the new title concise, with a soft limit of 40 characters (not a hard truncation)
+- check the current thread title
+- immediately name or correct it on the first turn if it does not fit
+- later rename only when the main topic clearly changes
+- keep the title concise, with a soft limit of 40 characters
 - use the user's habitual language for the title itself
 
 These tools are for the agent, not for end users.

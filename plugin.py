@@ -138,7 +138,7 @@ def discord_patch_thread(thread_id: str, new_name: str) -> dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def build_topic_guard_context(session_id: str) -> Optional[str]:
+def build_topic_guard_context(session_id: str, is_first_turn: bool = False) -> Optional[str]:
     source = source_for_session(session_id) if session_id else None
     if not source or source.get("platform") != "discord":
         return None
@@ -148,13 +148,14 @@ def build_topic_guard_context(session_id: str) -> Optional[str]:
     title = current_thread_title(source)
     if not title:
         return None
+    if not is_first_turn:
+        return None
     return (
         f"Current Discord thread title: {title}. "
-        f"Use `{GET_TOOL_NAME}` to confirm the current thread title when needed. "
-        f"If the conversation topic has clearly changed and no longer matches the current title, use `{CHANGE_TOOL_NAME}` to rename it. "
-        f"Keep the new title concise and under about {TITLE_SOFT_LIMIT} characters. "
-        f"The title itself should use the user's habitual language. "
-        "Do not rename if the current title still matches the discussion."
+        f"Use `{GET_TOOL_NAME}` to check it. "
+        f"On the first turn, if the title does not fit, use `{CHANGE_TOOL_NAME}` to name or correct it now. "
+        f"Later, rename only if the main topic clearly changes. "
+        f"Keep titles concise (soft limit: {TITLE_SOFT_LIMIT} chars) and use the user's habitual language."
     )
 
 
@@ -202,7 +203,10 @@ def register(ctx) -> None:
         remember_session_source(kwargs.get("session_id") or "", kwargs.get("source"))
 
     def pre_llm_call(**kwargs):
-        return build_topic_guard_context(kwargs.get("session_id") or "")
+        return build_topic_guard_context(
+            kwargs.get("session_id") or "",
+            is_first_turn=bool(kwargs.get("is_first_turn")),
+        )
 
     ctx.register_hook("on_session_start", on_session_start)
     ctx.register_hook("pre_llm_call", pre_llm_call)
