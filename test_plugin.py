@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import pathlib
 
 PLUGIN_PATH = pathlib.Path(__file__).with_name('plugin.py')
@@ -7,59 +8,32 @@ plugin = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plugin)
 
 
-def test_sender_allowed_for_xtra_and_mics(monkeypatch):
-    monkeypatch.delenv('DISCORD_ALLOWED_USERS', raising=False)
-    assert plugin.sender_allowed('[Xtra] 3全自動模式') is True
-    assert plugin.sender_allowed('[Mics] 可以') is True
-    assert plugin.sender_allowed('[Other] 不要亂改') is False
-
-
-def test_sender_allowed_uses_discord_allowed_users_env(monkeypatch):
-    monkeypatch.setenv('DISCORD_ALLOWED_USERS', 'alpha,beta')
-    assert plugin.sender_allowed('[Alpha] 可以') is True
-    assert plugin.sender_allowed('[Beta] 可以') is True
-    assert plugin.sender_allowed('[Xtra] 3全自動模式') is False
-    assert plugin.sender_allowed('[Mics] 可以') is False
-    assert plugin.sender_allowed('[Other] 不要亂改') is False
-
-
-def test_sender_allowed_normalizes_whitespace_and_case(monkeypatch):
-    monkeypatch.setenv('DISCORD_ALLOWED_USERS', '  Xtra , MICS  ')
-    assert plugin.sender_allowed('[Xtra] hi') is True
-    assert plugin.sender_allowed('[mics] hi') is True
-    assert plugin.sender_allowed('[Other] hi') is False
-
-
-def test_sender_allowed_ignores_numeric_ids_without_mapping(monkeypatch):
-    monkeypatch.setenv('DISCORD_ALLOWED_USERS', '141025716912259073,232751366735527936')
-    assert plugin.sender_allowed('[Xtra] 3全自動模式') is False
-    assert plugin.sender_allowed('[Mics] 可以') is False
-
-
-def test_sender_allowed_falls_back_when_env_has_no_valid_entries(monkeypatch):
-    monkeypatch.setenv('DISCORD_ALLOWED_USERS', ' , , ')
-    assert plugin.sender_allowed('[Xtra] 3全自動模式') is True
-    assert plugin.sender_allowed('[Mics] 可以') is True
-    assert plugin.sender_allowed('[Other] hi') is False
-
-
-def test_propose_auto_title_uses_newer_topic_keywords():
-    title = plugin.propose_auto_title(
-        current_title='Hermes 上下文與主題改名',
-        user_message='[Xtra] 3全自動模式',
-        assistant_response='可以做全自動模式，偵測主題漂移後自動改名。',
+def test_build_topic_guard_context_includes_current_title_and_tool_names(monkeypatch):
+    monkeypatch.setattr(
+        plugin,
+        'source_for_session',
+        lambda session_id: {
+            'platform': 'discord',
+            'thread_id': '1494707116454314115',
+            'chat_name': 'Guild / Hermes 上下文與主題改名',
+        },
     )
-    assert title is not None
-    assert '全自動' in title or '主題改名' in title
+    ctx = plugin.build_topic_guard_context('s1')
+    assert ctx is not None
+    assert 'Hermes 上下文與主題改名' in ctx
+    assert plugin.GET_TOOL_NAME in ctx
+    assert plugin.CHANGE_TOOL_NAME in ctx
+    assert str(plugin.TITLE_SOFT_LIMIT) in ctx
 
 
-def test_propose_auto_title_ignores_small_talk():
-    title = plugin.propose_auto_title(
-        current_title='Hermes 上下文與主題改名',
-        user_message='[Xtra] 牛阿歐力棒棒棒',
-        assistant_response='謝啦 Xtra 😎',
-    )
-    assert title is None
+def test_build_topic_guard_context_none_for_non_discord(monkeypatch):
+    monkeypatch.setattr(plugin, 'source_for_session', lambda session_id: {'platform': 'telegram'})
+    assert plugin.build_topic_guard_context('s1') is None
+
+
+def test_build_topic_guard_context_none_without_thread(monkeypatch):
+    monkeypatch.setattr(plugin, 'source_for_session', lambda session_id: {'platform': 'discord', 'chat_name': 'Guild / Title'})
+    assert plugin.build_topic_guard_context('s1') is None
 
 
 def test_loads_only_discord_bot_token_from_env_file(tmp_path, monkeypatch):
@@ -82,14 +56,85 @@ def test_loads_only_discord_bot_token_from_env_file(tmp_path, monkeypatch):
     assert 'DISCORD_TOKEN' not in plugin.os.environ
 
 
-def test_failed_patch_does_not_mark_duplicate(monkeypatch):
-    source = {'platform': 'discord', 'thread_id': '123', 'chat_name': 'Guild / 舊標題'}
-    monkeypatch.setattr(plugin, 'source_for_session', lambda session_id: source)
-    monkeypatch.setattr(plugin, 'discord_patch_thread', lambda thread_id, new_name: {'ok': False, 'error': 'boom'})
-    plugin.LAST_MESSAGE_SIG_BY_SESSION.clear()
-    plugin.LAST_AUTO_TITLE_BY_SESSION.clear()
+def test_get_thread_title_reads_current_session(monkeypatch):
+    monkeypatch.setattr(
+        plugin,
+        'source_for_session',
+        lambda session_id: {
+            'platform': 'discord',
+            'thread_id': '123',
+            'chat_name': 'Guild / 新主題',
+        },
+    )
+    result = json.loads(plugin.get_thread_title({}, session_id='s1'))
+    assert result == {'success': True, 'thread_id': '123', 'title': '新主題'}
 
-    plugin.maybe_auto_rename('s1', '[Xtra] 3全自動模式', '可以做全自動模式，偵測主題漂移後自動改名。')
-    assert plugin.LAST_AUTO_RENAME_STATUS == 'error'
-    assert 's1' not in plugin.LAST_MESSAGE_SIG_BY_SESSION
-    assert 's1' not in plugin.LAST_AUTO_TITLE_BY_SESSION
+
+def test_change_thread_title_validates_required_fields():
+    result = json.loads(plugin.change_thread_title({'thread_id': '', 'title': ''}))
+    assert result['success'] is False
+
+
+def test_change_thread_title_uses_session_thread_id_and_accepts_longer_titles(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        plugin,
+        'source_for_session',
+        lambda session_id: {
+            'platform': 'discord',
+            'thread_id': '123',
+            'chat_name': 'Guild / 舊標題',
+        },
+    )
+
+    def fake_patch(thread_id, title):
+        captured['thread_id'] = thread_id
+        captured['title'] = title
+        return {'ok': True, 'name': title}
+
+    monkeypatch.setattr(plugin, 'discord_patch_thread', fake_patch)
+    long_title = '這是一個超過四十字元的標題這是一個超過四十字元的標題這是一個超過四十字元的標題'
+    result = json.loads(plugin.change_thread_title({'thread_id': '123', 'title': long_title}, session_id='s1'))
+    assert result['success'] is True
+    assert captured['thread_id'] == '123'
+    assert captured['title'] == long_title
+
+
+def test_change_thread_title_rejects_when_no_active_thread_session(monkeypatch):
+    monkeypatch.setattr(plugin, 'source_for_session', lambda session_id: None)
+    result = json.loads(plugin.change_thread_title({'thread_id': '123', 'title': '新標題'}, session_id='s1'))
+    assert result['success'] is False
+    assert 'active Discord thread' in result['error']
+
+
+def test_change_thread_title_rejects_mismatched_thread_id(monkeypatch):
+    monkeypatch.setattr(
+        plugin,
+        'source_for_session',
+        lambda session_id: {
+            'platform': 'discord',
+            'thread_id': '123',
+            'chat_name': 'Guild / 舊標題',
+        },
+    )
+    result = json.loads(plugin.change_thread_title({'thread_id': '999', 'title': '新標題'}, session_id='s1'))
+    assert result['success'] is False
+    assert 'mismatch' in result['error']
+
+
+def test_register_adds_pre_llm_hook_and_two_tools():
+    calls = {'hooks': [], 'tools': []}
+
+    class DummyCtx:
+        def register_hook(self, name, callback):
+            calls['hooks'].append(name)
+
+        def register_tool(self, **kwargs):
+            calls['tools'].append(kwargs['name'])
+
+    plugin.register(DummyCtx())
+    assert 'on_session_start' in calls['hooks']
+    assert 'pre_llm_call' in calls['hooks']
+    assert plugin.GET_TOOL_NAME in calls['tools']
+    assert plugin.CHANGE_TOOL_NAME in calls['tools']

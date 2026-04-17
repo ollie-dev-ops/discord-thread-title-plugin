@@ -1,25 +1,36 @@
 # Discord Thread Title Plugin for Hermes
 
-A Hermes plugin that renames Discord thread titles without modifying Hermes core.
+A minimal Hermes plugin for Discord thread title management without modifying Hermes core.
 It reads only `DISCORD_BOT_TOKEN` from `~/.hermes/.env` and does not bulk-load other environment variables.
 
-## Features
+## What it does
 
-- `/rename-thread <title>` manually renames the current Discord thread
-- `/suggest-thread-title <hint>` suggests a clearer title
-- Fully automatic rename mode after each assistant response
-- Sender allowlist is configurable via `DISCORD_ALLOWED_USERS`
-- Default sender filter: `Xtra` and `Mics` when `DISCORD_ALLOWED_USERS` is unset
-- Small-talk filter to avoid noisy renames
-- Reads **only** `DISCORD_BOT_TOKEN` from `~/.hermes/.env`
-- Does **not** load the rest of `.env`
-- Does **not** fall back to `DISCORD_TOKEN`
+When the conversation is inside a Discord thread, the plugin provides the agent with:
 
-## How it works
+- `get_thread_title` — read the current Discord thread title and thread ID
+- `change_thread_title` — rename the current Discord thread
 
-The plugin stores the current gateway session origin, recovers Discord `thread_id` from Hermes session metadata, and calls Discord REST API:
+It also injects a short English prompt before the model call telling Hermes to:
 
-- `PATCH /channels/{thread_id}`
+- check whether the current conversation still matches the current thread title
+- avoid renaming if the current title still fits
+- rename only when the topic has clearly changed
+- keep the new title concise, with a soft limit of 40 characters (not a hard truncation)
+- use the user's habitual language for the title itself
+
+These tools are for the agent, not for end users.
+
+## Design
+
+This plugin intentionally stays simple:
+
+- no extra AI rename judge inside the plugin
+- no user-facing slash commands
+- no sender allowlist logic
+- no topic heuristics unrelated to the tools above
+- no fallback to `DISCORD_TOKEN`
+
+The main model decides whether to rename, using the injected prompt and the tools.
 
 ## Install
 
@@ -35,12 +46,6 @@ Required files:
 - `__init__.py`
 - `plugin.py`
 
-A minimal `__init__.py` can simply re-export:
-
-```python
-from .plugin import register
-```
-
 ## Token loading
 
 This project intentionally reads only one value from `~/.hermes/.env`:
@@ -49,25 +54,21 @@ This project intentionally reads only one value from `~/.hermes/.env`:
 
 It does not import `python-dotenv`, does not bulk-load `.env`, and does not read other secrets.
 
-## Sender allowlist
+## Internal tools
 
-You can override the default sender names via environment variable:
+### `get_thread_title`
+Returns the current thread title and thread ID for the active Discord thread session.
 
-```text
-DISCORD_ALLOWED_USERS=Xtra,Mics
-```
+### `change_thread_title`
+Renames the current Discord thread.
 
-The plugin currently compares normalized bracketed sender display names like `[Xtra]` and `[Mics]` against this comma-separated list.
-If `DISCORD_ALLOWED_USERS` is unset, or if it contains no valid non-empty entries, it falls back to the built-in default allowlist.
+Parameters:
 
-Examples:
+- `thread_id`
+- `title`
 
-```text
-DISCORD_ALLOWED_USERS=Xtra,Mics
-DISCORD_ALLOWED_USERS=alpha,beta
-```
-
-Note: this v2 implementation uses sender names from the message prefix, not raw Discord numeric user IDs.
+The plugin validates required fields, requires an active Discord thread session, and enforces that the requested `thread_id` matches the current session before calling Discord.
+It does not hard-truncate titles to 40 characters; the 40-character rule is a soft limit communicated to the main model.
 
 ## Tests
 

@@ -2,32 +2,14 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any, Optional
 from urllib import error, request
 
 SESSION_ID_TO_SOURCE: dict[str, dict[str, Any]] = {}
-LAST_AUTO_TITLE_BY_SESSION: dict[str, str] = {}
-LAST_MESSAGE_SIG_BY_SESSION: dict[str, str] = {}
-
-ALLOWED_SENDERS = {"xtra", "mics"}
-SMALL_TALK_PATTERNS = [
-    re.compile(p, re.I)
-    for p in [r"棒棒", r"謝啦|謝謝|thanks?", r"哈哈|lol|lmao", r"^ok$|^okay$|^收到$", r"牛阿"]
-]
-KEYWORD_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("全自動模式", re.compile(r"全自動|auto\s*mode|自動改名", re.I)),
-    ("半自動模式", re.compile(r"半自動|semi[-\s]*auto", re.I)),
-    ("主題改名", re.compile(r"改名|rename|標題", re.I)),
-    ("Plugin 擴充", re.compile(r"plugin|擴充", re.I)),
-    ("上下文", re.compile(r"上下文|context", re.I)),
-]
-
-LAST_AUTO_RENAME_RESULT: Optional[str] = None
-LAST_AUTO_RENAME_STATUS: Optional[str] = None
-LAST_AUTO_RENAME_TITLE: Optional[str] = None
-LAST_AUTO_RENAME_SKIPPED_REASON: Optional[str] = None
+TITLE_SOFT_LIMIT = 40
+CHANGE_TOOL_NAME = "change_thread_title"
+GET_TOOL_NAME = "get_thread_title"
 
 
 def hermes_home() -> Path:
@@ -77,36 +59,12 @@ def source_for_session(session_id: str) -> Optional[dict[str, Any]]:
     return None
 
 
-def normalize_title(raw: str, max_len: int = 100) -> str:
+def normalize_title(raw: str, max_len: int = TITLE_SOFT_LIMIT) -> str:
     title = " ".join((raw or "").strip().split())
     title = title.strip("#`'\" ")
     if len(title) > max_len:
         title = title[:max_len].rstrip()
     return title
-
-
-def sender_name(text: str) -> str:
-    m = re.match(r"\[(.*?)\]", (text or "").strip())
-    return m.group(1).strip().lower() if m else ""
-
-
-def allowed_senders() -> set[str]:
-    raw = os.environ.get('DISCORD_ALLOWED_USERS', '').strip()
-    if not raw:
-        return set(ALLOWED_SENDERS)
-    values = {part.strip().lower() for part in raw.split(',') if part.strip()}
-    return values or set(ALLOWED_SENDERS)
-
-
-def sender_allowed(text: str) -> bool:
-    return sender_name(text) in allowed_senders()
-
-
-def is_small_talk(text: str) -> bool:
-    compact = normalize_title(re.sub(r"^\[[^\]]+\]\s*", "", text or ""), max_len=200)
-    if not compact:
-        return True
-    return any(p.search(compact) for p in SMALL_TALK_PATTERNS)
 
 
 def current_thread_title(source: Optional[dict[str, Any]]) -> str:
@@ -116,24 +74,6 @@ def current_thread_title(source: Optional[dict[str, Any]]) -> str:
     if " / " in chat_name:
         return chat_name.split(" / ")[-1].strip()
     return chat_name.strip()
-
-
-def propose_auto_title(current_title: str, user_message: str, assistant_response: str) -> Optional[str]:
-    if not sender_allowed(user_message):
-        return None
-    if is_small_talk(user_message) and is_small_talk(assistant_response):
-        return None
-
-    combined = f"{user_message}\n{assistant_response}"
-    hits = [label for label, pattern in KEYWORD_PATTERNS if pattern.search(combined)]
-    if not hits:
-        return None
-
-    unique_hits = list(dict.fromkeys(hits))
-    candidate = normalize_title(" / ".join(unique_hits[:2]))
-    if not candidate or candidate == normalize_title(current_title):
-        return None
-    return candidate
 
 
 def load_discord_bot_token_from_env_file() -> str:
@@ -176,13 +116,18 @@ def discord_patch_thread(thread_id: str, new_name: str) -> dict[str, Any]:
         headers={
             "Authorization": f"Bot {token}",
             "Content-Type": "application/json",
-            "User-Agent": "DiscordThreadTitlePlugin/1.0",
+            "User-Agent": "DiscordThreadTitlePlugin/4.0",
         },
     )
     try:
         with request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read().decode("utf-8") or "{}")
-            return {"ok": True, "status": getattr(resp, "status", 200), "name": data.get("name", new_name)}
+            return {
+                "ok": True,
+                "status": getattr(resp, "status", 200),
+                "thread_id": data.get("id", thread_id),
+                "name": data.get("name", new_name),
+            }
     except error.HTTPError as e:
         try:
             detail = json.loads(e.read().decode("utf-8") or "{}")
@@ -193,107 +138,113 @@ def discord_patch_thread(thread_id: str, new_name: str) -> dict[str, Any]:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def rename_current_thread(session_id: str, new_title: str) -> str:
-    source = source_for_session(session_id) if session_id else None
-    if not source:
-        return "找不到目前 session 的來源資訊，無法判定 thread。"
-    if source.get("platform") != "discord":
-        return "這個指令目前只支援 Discord gateway session。"
-    thread_id = str(source.get("thread_id") or "").strip()
-    if not thread_id:
-        return "目前不是 Discord 討論串／找不到 thread_id。"
-
-    title = normalize_title(new_title)
-    if not title:
-        return "用法：`/rename-thread 新標題`"
-    result = discord_patch_thread(thread_id, title)
-    if result.get("ok"):
-        return f"已改名為：`{result.get('name', title)}`"
-    if result.get("status"):
-        return f"改名失敗（HTTP {result['status']}）：{result.get('error', 'unknown error')}"
-    return f"改名失敗：{result.get('error', 'unknown error')}"
-
-
-def suggest_title(session_id: str, raw_args: str) -> str:
-    current = current_thread_title(source_for_session(session_id) if session_id else None)
-    hint = normalize_title(raw_args)
-    if not hint:
-        return f"目前標題參考：`{current}`\n用法：`/suggest-thread-title 新方向或關鍵字`" if current else "用法：`/suggest-thread-title 新方向或關鍵字`"
-    return f"目前：`{current}`\n建議改名：`{hint}`" if current else f"建議改名：`{hint}`"
-
-
-def maybe_auto_rename(session_id: str, user_message: str, assistant_response: str) -> None:
-    global LAST_AUTO_RENAME_RESULT, LAST_AUTO_RENAME_STATUS, LAST_AUTO_RENAME_TITLE, LAST_AUTO_RENAME_SKIPPED_REASON
-
-    LAST_AUTO_RENAME_RESULT = None
-    LAST_AUTO_RENAME_STATUS = None
-    LAST_AUTO_RENAME_TITLE = None
-    LAST_AUTO_RENAME_SKIPPED_REASON = None
-
+def build_topic_guard_context(session_id: str) -> Optional[str]:
     source = source_for_session(session_id) if session_id else None
     if not source or source.get("platform") != "discord":
-        LAST_AUTO_RENAME_STATUS = "skipped"
-        LAST_AUTO_RENAME_SKIPPED_REASON = "not-discord"
-        return
+        return None
     thread_id = str(source.get("thread_id") or "").strip()
     if not thread_id:
-        LAST_AUTO_RENAME_STATUS = "skipped"
-        LAST_AUTO_RENAME_SKIPPED_REASON = "no-thread"
-        return
-    if not sender_allowed(user_message):
-        LAST_AUTO_RENAME_STATUS = "skipped"
-        LAST_AUTO_RENAME_SKIPPED_REASON = "sender-not-allowed"
-        return
+        return None
+    title = current_thread_title(source)
+    if not title:
+        return None
+    return (
+        f"Current Discord thread title: {title}. "
+        f"Use `{GET_TOOL_NAME}` to confirm the current thread title when needed. "
+        f"If the conversation topic has clearly changed and no longer matches the current title, use `{CHANGE_TOOL_NAME}` to rename it. "
+        f"Keep the new title concise and under about {TITLE_SOFT_LIMIT} characters. "
+        f"The title itself should use the user's habitual language. "
+        "Do not rename if the current title still matches the discussion."
+    )
 
-    proposal = propose_auto_title(current_thread_title(source), user_message, assistant_response)
-    if not proposal:
-        LAST_AUTO_RENAME_STATUS = "skipped"
-        LAST_AUTO_RENAME_SKIPPED_REASON = "no-proposal"
-        return
 
-    signature = f"{sender_name(user_message)}::{proposal}::{normalize_title(user_message, 160)}"
-    if LAST_MESSAGE_SIG_BY_SESSION.get(session_id) == signature or LAST_AUTO_TITLE_BY_SESSION.get(session_id) == proposal:
-        LAST_AUTO_RENAME_STATUS = "skipped"
-        LAST_AUTO_RENAME_SKIPPED_REASON = "duplicate"
-        return
+def get_thread_title(args: dict[str, Any], session_id: str = "") -> str:
+    source = source_for_session(session_id) if session_id else None
+    if not source or source.get("platform") != "discord":
+        return json.dumps({"success": False, "error": "current session is not a Discord thread"}, ensure_ascii=False)
+    thread_id = str(source.get("thread_id") or "").strip()
+    title = current_thread_title(source)
+    if not thread_id or not title:
+        return json.dumps({"success": False, "error": "thread metadata unavailable"}, ensure_ascii=False)
+    return json.dumps({"success": True, "thread_id": thread_id, "title": title}, ensure_ascii=False)
 
-    result = discord_patch_thread(thread_id, proposal)
+
+def change_thread_title(args: dict[str, Any], session_id: str = "") -> str:
+    source = source_for_session(session_id) if session_id else None
+    current_thread_id = str((source or {}).get("thread_id") or "").strip()
+    requested_thread_id = str(args.get("thread_id") or "").strip()
+    title = normalize_title(str(args.get("title") or ""), max_len=200)
+
+    if not current_thread_id:
+        return json.dumps({"success": False, "error": "current session is not an active Discord thread"}, ensure_ascii=False)
+    if not requested_thread_id:
+        return json.dumps({"success": False, "error": "thread_id is required"}, ensure_ascii=False)
+    if requested_thread_id != current_thread_id:
+        return json.dumps({"success": False, "error": "thread_id mismatch with current session"}, ensure_ascii=False)
+    if not title:
+        return json.dumps({"success": False, "error": "title is required"}, ensure_ascii=False)
+
+    result = discord_patch_thread(current_thread_id, title)
     if result.get("ok"):
-        LAST_MESSAGE_SIG_BY_SESSION[session_id] = signature
-        LAST_AUTO_TITLE_BY_SESSION[session_id] = proposal
-        LAST_AUTO_RENAME_STATUS = "renamed"
-        LAST_AUTO_RENAME_TITLE = proposal
-        LAST_AUTO_RENAME_RESULT = result.get("name", proposal)
-        return
-
-    LAST_AUTO_RENAME_STATUS = "error"
-    LAST_AUTO_RENAME_SKIPPED_REASON = result.get("error", "patch-failed")
+        return json.dumps({"success": True, "thread_id": current_thread_id, "title": result.get("name", title)}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "success": False,
+            "error": result.get("error", "unknown error"),
+            "status": result.get("status"),
+        },
+        ensure_ascii=False,
+    )
 
 
 def register(ctx) -> None:
-    state: dict[str, Any] = {"last_session_id": None}
-
     def on_session_start(**kwargs):
-        session_id = kwargs.get("session_id")
-        source = kwargs.get("source")
-        if session_id:
-            state["last_session_id"] = session_id
-        remember_session_source(session_id, source)
+        remember_session_source(kwargs.get("session_id") or "", kwargs.get("source"))
 
-    def rename_thread_command(raw_args: str) -> str:
-        return rename_current_thread(state.get("last_session_id") or "", raw_args)
-
-    def suggest_thread_title_command(raw_args: str) -> str:
-        return suggest_title(state.get("last_session_id") or "", raw_args)
-
-    def post_llm_call(**kwargs):
-        maybe_auto_rename(
-            session_id=kwargs.get("session_id") or "",
-            user_message=kwargs.get("user_message") or "",
-            assistant_response=kwargs.get("assistant_response") or "",
-        )
+    def pre_llm_call(**kwargs):
+        return build_topic_guard_context(kwargs.get("session_id") or "")
 
     ctx.register_hook("on_session_start", on_session_start)
-    ctx.register_hook("post_llm_call", post_llm_call)
-    ctx.register_command("rename-thread", rename_thread_command, description="Rename the current Discord thread.")
-    ctx.register_command("suggest-thread-title", suggest_thread_title_command, description="Suggest a clearer title.")
+    ctx.register_hook("pre_llm_call", pre_llm_call)
+    ctx.register_tool(
+        name=GET_TOOL_NAME,
+        toolset="discord-thread-title",
+        description="Get the current Discord thread title and thread ID for the active session.",
+        schema={
+            "name": GET_TOOL_NAME,
+            "description": "Get the current Discord thread title and thread ID for the active session.",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        handler=lambda args, **kwargs: get_thread_title(args, session_id=str(kwargs.get("session_id") or "")),
+        check_fn=lambda: True,
+        requires_env=[],
+        emoji="🔎",
+    )
+    ctx.register_tool(
+        name=CHANGE_TOOL_NAME,
+        toolset="discord-thread-title",
+        description="Rename the current Discord thread when the topic has clearly changed.",
+        schema={
+            "name": CHANGE_TOOL_NAME,
+            "description": "Rename the current Discord thread when the main topic has clearly changed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Current Discord thread ID. Prefer the ID returned by get_thread_title.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": f"New concise thread title. Keep it within about {TITLE_SOFT_LIMIT} characters.",
+                    },
+                },
+                "required": ["thread_id", "title"],
+                "additionalProperties": False,
+            },
+        },
+        handler=lambda args, **kwargs: change_thread_title(args, session_id=str(kwargs.get("session_id") or "")),
+        check_fn=lambda: bool(discord_token()),
+        requires_env=["DISCORD_BOT_TOKEN"],
+        emoji="🧵",
+    )
