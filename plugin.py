@@ -90,8 +90,16 @@ def sender_name(text: str) -> str:
     return m.group(1).strip().lower() if m else ""
 
 
+def allowed_senders() -> set[str]:
+    raw = os.environ.get('DISCORD_ALLOWED_USERS', '').strip()
+    if not raw:
+        return set(ALLOWED_SENDERS)
+    values = {part.strip().lower() for part in raw.split(',') if part.strip()}
+    return values or set(ALLOWED_SENDERS)
+
+
 def sender_allowed(text: str) -> bool:
-    return sender_name(text) in ALLOWED_SENDERS
+    return sender_name(text) in allowed_senders()
 
 
 def is_small_talk(text: str) -> bool:

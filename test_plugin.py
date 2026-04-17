@@ -7,10 +7,40 @@ plugin = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plugin)
 
 
-def test_sender_allowed_for_xtra_and_mics():
+def test_sender_allowed_for_xtra_and_mics(monkeypatch):
+    monkeypatch.delenv('DISCORD_ALLOWED_USERS', raising=False)
     assert plugin.sender_allowed('[Xtra] 3全自動模式') is True
     assert plugin.sender_allowed('[Mics] 可以') is True
     assert plugin.sender_allowed('[Other] 不要亂改') is False
+
+
+def test_sender_allowed_uses_discord_allowed_users_env(monkeypatch):
+    monkeypatch.setenv('DISCORD_ALLOWED_USERS', 'alpha,beta')
+    assert plugin.sender_allowed('[Alpha] 可以') is True
+    assert plugin.sender_allowed('[Beta] 可以') is True
+    assert plugin.sender_allowed('[Xtra] 3全自動模式') is False
+    assert plugin.sender_allowed('[Mics] 可以') is False
+    assert plugin.sender_allowed('[Other] 不要亂改') is False
+
+
+def test_sender_allowed_normalizes_whitespace_and_case(monkeypatch):
+    monkeypatch.setenv('DISCORD_ALLOWED_USERS', '  Xtra , MICS  ')
+    assert plugin.sender_allowed('[Xtra] hi') is True
+    assert plugin.sender_allowed('[mics] hi') is True
+    assert plugin.sender_allowed('[Other] hi') is False
+
+
+def test_sender_allowed_ignores_numeric_ids_without_mapping(monkeypatch):
+    monkeypatch.setenv('DISCORD_ALLOWED_USERS', '141025716912259073,232751366735527936')
+    assert plugin.sender_allowed('[Xtra] 3全自動模式') is False
+    assert plugin.sender_allowed('[Mics] 可以') is False
+
+
+def test_sender_allowed_falls_back_when_env_has_no_valid_entries(monkeypatch):
+    monkeypatch.setenv('DISCORD_ALLOWED_USERS', ' , , ')
+    assert plugin.sender_allowed('[Xtra] 3全自動模式') is True
+    assert plugin.sender_allowed('[Mics] 可以') is True
+    assert plugin.sender_allowed('[Other] hi') is False
 
 
 def test_propose_auto_title_uses_newer_topic_keywords():
