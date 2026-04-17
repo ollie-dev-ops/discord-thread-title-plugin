@@ -8,7 +8,7 @@ plugin = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plugin)
 
 
-def test_build_topic_guard_context_includes_current_title_and_tool_names_on_first_turn(monkeypatch):
+def test_build_topic_guard_context_includes_tool_and_first_turn_directive(monkeypatch):
     monkeypatch.setattr(
         plugin,
         'source_for_session',
@@ -20,7 +20,7 @@ def test_build_topic_guard_context_includes_current_title_and_tool_names_on_firs
     )
     ctx = plugin.build_topic_guard_context('s1', is_first_turn=True)
     assert ctx is not None
-    assert 'Hermes 上下文與主題改名' in ctx
+    assert 'Hermes 上下文與主題改名' not in ctx
     assert plugin.CHANGE_TOOL_NAME in ctx
     assert str(plugin.TITLE_SOFT_LIMIT) in ctx
     assert 'On the first turn' in ctx
